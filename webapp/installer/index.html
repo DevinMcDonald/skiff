@@ -794,13 +794,16 @@ async function captureBackup(request, firmware, onProgress = () => {}) {
   const file = { format: "felucca-backup", version: 1, firmware, created: new Date().toISOString(), objects };
   readBackup(file); return file;
 }
-async function restoreBackup(request, file, onProgress = () => {}) {
+// (Skiff 2.0) only: the ids to write (the installer's write-back of converted objects, web/conv/conv.js); the others
+// stay as the unit has them. In the same order.
+async function restoreBackup(request, file, onProgress = () => {}, only = null) {
   const archive = readBackup(file); // Validate every byte before the first destructive request.
-  const total = archive.objects.reduce((n, o) => n + o.size, 0); let done = 0;
+  const pick = (o) => !only || only.includes(o.id);
+  const total = archive.objects.filter(pick).reduce((n, o) => n + o.size, 0); let done = 0;
   const ask = async (r, o = {}) => request(r, { timeout: 4000, retries: 0, ...o });
   const put = async (args) => { const a = await ask([BACKUP_CMD.PUT, args]); bkCheck(a[2]); return a; };
   // Restore live music last. Other objects commit individually; a disconnect can leave a partial restore.
-  for (const o of [...archive.objects.slice(2), archive.objects[1], archive.objects[0]]) {
+  for (const o of [...archive.objects.slice(2), archive.objects[1], archive.objects[0]].filter(pick)) {
     if (o.id >= 32) {
       const slot = o.id - 32;
       const check = (a) => { if (a[0] !== slot) throw new Error("Unexpected sample reply"); bkCheck(a.at(-1)); };
@@ -861,6 +864,89 @@ class BackupConnection {
   }
 }
 
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments
+// (Skiff 2.0, Tier B: design/TIER_B.md 10) The converter in the page: an archive of before (web/fm1backup.js) into
+// what 2.0 reads, by conv.wasm (web/conv/conv.c: the firmware's own code over a simulated flash).
+//   const conv = await loadConverter(wasmBytesOrUrl);
+//   const { archive, report, writeBack } = conv.convert(readBackup(file));
+// archive: a complete 2.0 archive (29 objects); writeBack: the ids whose bytes changed, which 2.0 couldn't read as they
+// were or the conversion filled (pattern chunks, the user presets' patches): the installer writes back only those;
+// report: a line per object (what it was, what it is now, kept / converted / refused; note: what had no place in 2.0,
+// felucca.c conv_note). Refused: damaged (the unit refuses it too: a restore leaves it out); "kept as it was: the
+// patterns are full": an old project no free pattern could take, which a 2.0 unit keeps whole (OLD FORMAT) for later. An archive without the pattern bank is Felucca's (or Skiff's before it): its user presets of
+// Felucca 1.2+ are mapped by name (conv_source).
+
+const CONV_MAGICS = { 0x534B4634: "SKF4", 0x534B4633: "SKF3", 0x534B4632: "SKF2", 0x534B4631: "SKF1", 0x46554E41: "FUNA" };
+for (let v = 1; v <= 9; v++) CONV_MAGICS[0x46554E30 + v] = `FUN${v}`;
+const convU32 = (b, o) => (b[o] | b[o + 1] << 8 | b[o + 2] << 16 | b[o + 3] << 24) >>> 0;
+
+/* what an object holds, in a word or two (the report) */
+function convKind(id, b) {
+  if (!b || !b.length) return "empty";
+  if (id >= 32) return "samples";
+  if (id >= 16) return "patterns";
+  if (id === 0 || id <= 5 && id >= 2) return CONV_MAGICS[convU32(b, 0)] || "unknown";
+  if (id === 1) return { 0x534B5331: "SKS1", 0x50455234: "PER4" }[convU32(b, 0)] || "unknown";
+  if (id === 6 || id === 7) {
+    const v = {};
+    for (let i = 0; i < 16; i++) if (b[8 + i * 192] === 0xA5) { const k = `v${b[9 + i * 192]}`; v[k] = (v[k] || 0) + 1; }
+    return Object.keys(v).sort().map((k) => `${v[k]} ${k}`).join(", ") || "none used";
+  }
+  if (id === 8) return "FM6 bank (1.0-1.0.2)";
+  return id === 9 ? "FM6 patches" : "unknown";
+}
+const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const convBase64 = (bytes) => { let s = ""; for (const x of bytes) s += String.fromCharCode(x); return btoa(s); };
+
+async function loadConverter(src) {
+  const bytes = typeof src === "string" ? new Uint8Array(await (await fetch(src)).arrayBuffer()) : src;
+  const { instance } = await WebAssembly.instantiate(bytes, {});
+  const x = instance.exports;
+  x._initialize?.();
+  const buf = () => new Uint8Array(x.memory.buffer, x.conv_buf(), 81920);
+  return {
+    convert(archive) {
+      const input = new Map(archive.objects.map((o) => [o.id, o]));
+      const bytesOf = (id) => input.get(id)?.bytes || new Uint8Array(0);
+      const rc = new Map();
+      x.conv_reset();
+      x.conv_source(archive.objects.length < BACKUP_IDS.length ? 1 : 0);
+      for (const id of [...archive.objects.slice(2).map((o) => o.id), 1, 0]) {   // (restoreBackup's order: the music last)
+        const b = bytesOf(id);
+        if (id >= 32 || !b.length) continue;
+        buf().set(b);
+        rc.set(id, x.conv_put(id, b.length));
+      }
+      x.conv_fix();
+      const objects = [], report = [], writeBack = [];
+      for (const id of BACKUP_IDS) {
+        const was = bytesOf(id);
+        let now = was, what = "kept";
+        if (id < 32) {
+          const conv = buf().slice(0, x.conv_get(id));
+          const left = !!x.conv_needs(id, conv.length);   // (still a format of before: no pattern was free for its steps)
+          buf().set(was);
+          const needs = !!x.conv_needs(id, was.length), r = rc.get(id);
+          if (needs && (r === 4 || (r === 0 && left))) what = "kept as it was: the patterns are full";
+          else if (needs && r !== 0) what = "refused, kept as it was";
+          else if (needs || (id === 8 || id === 9 || id >= 16) && !sameBytes(conv, was)) { now = conv; what = was.length ? "converted" : "added"; }
+        }
+        if (now !== was) writeBack.push(id);
+        const n = x.conv_note(id), note = n ? String.fromCharCode(...buf().subarray(0, n)) : "";
+        report.push({ id, was: convKind(id, was), now: convKind(id, now), what, ...(note ? { note } : {}) });
+        const kept = now === was && input.get(id);
+        objects.push(kept ? { id, size: kept.size, crc: kept.crc, data: kept.data, bytes: was }
+                          : { id, size: now.length, crc: bkCrc(now), data: convBase64(now), bytes: now });
+      }
+      return {
+        archive: { format: "felucca-backup", version: 1, firmware: archive.firmware, created: archive.created, objects },
+        report, writeBack,
+      };
+    },
+  };
+}
+
 const $ = (id) => document.getElementById(id);
 const TEXT = {
   ja: {
@@ -882,6 +968,12 @@ const TEXT = {
     stockUnsupported: "このファームウェアは Skiff の全体バックアップを作れません。古い Skiff なら先に最新版をインストールしてください。他のファームウェアから戻すには M-VAVE のアップデーターを使ってください。",
     stockIsStock: "この機器はすでにその公式ファームウェアです。",
     stockNotSkiff: "この機器は Skiff ではないため、バックアップする Skiff の曲はありません。他のファームウェアから戻すには M-VAVE のアップデーターを使ってください。機器の報告: ",
+    saved20: "Skiff 2.0 は、それより前のファームウェアで保存したデータをそのままでは開けません。先にこの機器の全体バックアップをこのパソコンに保存しました（Skiff-backup-....json）。これが元に戻す方法です: 今のファームウェアを入れ直し、エディタで復元します。Skiff 2.0 をインストールしますか？",
+    converting: "前のファームウェアで保存したデータを 2.0 用に変換中 ",
+    converted: "完了。前のファームウェアで保存したデータを 2.0 用に変換しました（下に一覧）。",
+    asIs: "完了。この機器のデータはそのまま 2.0 で開けます。",
+    convertedPart: "完了しましたが、前のファームウェアで保存したデータの一部はそのままです（下に一覧）。本体では OLD FORMAT と表示されます。空きパターンが足りなかったプロジェクトは、SAVE > PATTERNS で空けてからエディタでバックアップし、それを復元すると変換されます。",
+    convertFailed: "インストールは完了しましたが、前のデータの変換に失敗しました。保存したバックアップをエディタで復元してください（復元時に変換されます）。",
     stockWrongModel: "選んだファイルは、接続している機器とは別の機種用です。",
     backup: "全体バックアップ保存中 ", stockError: "公式ファイルを確認できません: ",
     nomidi: "このブラウザでは使えません。Chrome か Edge で開いてください。", loadfail: "読み込めませんでした: ",
@@ -922,6 +1014,12 @@ const TEXT = {
     stockUnsupported: "This firmware cannot make a complete Skiff backup. An older Skiff: install the current Skiff first. Another firmware: return with M-VAVE's updater.",
     stockIsStock: "This keyboard already runs that official firmware.",
     stockNotSkiff: "This keyboard is not running Skiff, so there is no Skiff music to back up. To return from another firmware, use M-VAVE's updater. It reports: ",
+    saved20: "Skiff 2.0 opens nothing that firmware before it saves: a complete backup of this unit was saved to this computer first (Skiff-backup-....json). It is the way back: install your firmware of now, then restore it in the editor. Install Skiff 2.0?",
+    converting: "Converting what the firmware before saved, for 2.0 ",
+    converted: "Done. What the firmware before saved was converted for 2.0 (the list below).",
+    asIs: "Done. Everything this unit had opens in 2.0 as it is.",
+    convertedPart: "Done, but some of what the firmware before saved stays as it was (the list below): the unit shows it as OLD FORMAT. A project no free pattern could take converts once you free some (SAVE > PATTERNS), take a backup in the editor and restore it.",
+    convertFailed: "Installed, but converting what the firmware before saved failed: restore the saved backup in the editor, which converts it. ",
     stockWrongModel: "The selected file is for another model than the connected keyboard.",
     backup: "Saving complete backup ", stockError: "Cannot validate official firmware: ",
     nomidi: "This browser cannot do it. Open the page in Chrome or Edge.", loadfail: "Could not load: ",
@@ -958,7 +1056,7 @@ applyLang();
 const sayK = (k, arg = "") => { lastKey = k; lastArg = arg; $("status").textContent = t(k) + arg; };
 const say = (txt) => { lastKey = null; $("status").textContent = txt; };
 const log = (t) => { $("log").textContent += t + "\n"; };
-const meta = {"version": "1.4", "product": "FM-1_714", "pkg": "../../firmware/skiff-1.4.fwsc", "packages": [{"product": "FM-1_714", "pkg": "../../firmware/skiff-1.4.fwsc"}, {"product": "SMK-37 Pro_714", "pkg": "../../firmware/skiff-1.4-smk37.fwsc"}, {"product": "SMK-37 Elite_714", "pkg": "../../firmware/skiff-1.4-smk37-elite.fwsc"}, {"product": "MKE-P37_714", "pkg": "../../firmware/skiff-1.4-smk37-mke.fwsc"}]};
+const meta = {"version": "2.0", "product": "FM-1_720", "pkg": "../../firmware/skiff-2.0.fwsc", "packages": [{"product": "FM-1_720", "pkg": "../../firmware/skiff-2.0.fwsc"}, {"product": "SMK-37 Pro_720", "pkg": "../../firmware/skiff-2.0-smk37.fwsc"}, {"product": "SMK-37 Elite_720", "pkg": "../../firmware/skiff-2.0-smk37-elite.fwsc"}, {"product": "MKE-P37_720", "pkg": "../../firmware/skiff-2.0-smk37-mke.fwsc"}]};
 // one package per model ({ product, pkg }); a site made before the SMK builds carries only product + pkg
 const packages = meta.packages || [{ product: meta.product, pkg: meta.pkg }];
 const images = new Map();             // product -> logical image, loaded on first use
@@ -1010,8 +1108,12 @@ $("go").addEventListener("click", async () => {
     if (!IS_OTA(dev.id) && needsStockUpdate(dev.id)) { sayK("needV016", dev.id.text); return; }
     const image = await imageFor(entry);
     const step = stepper();
-    if (IS_OTA(dev.id)) sayK((await up.resume(image, step, entry.product)) ? "done" : "stopped");
-    else await up.install(image, entry.product, step);
+    if (IS_OTA(dev.id)) { sayK((await up.resume(image, step, entry.product)) ? "done" : "stopped"); return; }
+    const model = entry.product.split("_")[0];
+    const archive = await backupBefore(up, model);   // ((2.0) over firmware before it: the backup first, the way back)
+    if (archive && !confirm(t("saved20"))) return;
+    await up.install(image, entry.product, step);
+    if (archive) await convertAfter(up, model, archive);
   } catch (e) {
     if (e && e.code && TEXT[lang][e.code]) sayK(e.code, e.detail || (e.code === "loadfail" ? e.message : ""));
     else sayK("error", e && e.message);
@@ -1033,6 +1135,47 @@ function saveArchive(archive) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(archive)], {type:"application/json"}));
   const a = document.createElement("a"); a.href = url; a.download = `Skiff-backup-${new Date().toISOString().slice(0,10)}.json`;
   document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// ((Skiff 2.0, Tier B: design/TIER_B.md 10) installing 2.0 over firmware before it that answers complete backups (Skiff,
+// Felucca 1.0.3 on): its backup taken and saved to this computer first (the way back; a failure stops before anything is
+// written); after the install, what 2.0 can't read converted (web/conv/conv.js) and only that written back. Other
+// firmware (stock, JIANT: nothing of Skiff's to convert) installs as before
+const major = (v) => +(/(\d+)\.\d/.exec(v || "") || [0, 0])[1];
+async function backupBefore(up, model) {
+  if (major(meta.version) < 2) return null;
+  const device = await up.find((id) => !IS_OTA(id) && sameModel(id.model, model));
+  if (!device) return null;
+  const input = device.link.input, output = device.link.output; device.link.close();
+  const link = new BackupConnection(input, output);
+  try {
+    let reply;
+    try { reply = await link.request([1, []]); }
+    catch (e) { if (e.code === "timeout") return null; throw e; }
+    const info = archiveInfo(reply);
+    if (!info.supported || major(info.version) >= 2) return null;
+    const archive = await captureBackup((r, o) => link.request(r, o), info.version,
+      (done, total) => sayK("backup", `${Math.round(done / Math.max(1, total) * 100)}%`));
+    saveArchive(archive);
+    return archive;
+  } finally { link.close(); }
+}
+async function convertAfter(up, model, archive) {
+  let link = null;
+  sayK("converting");
+  try {
+    const device = await up.waitFor((id) => !IS_OTA(id) && sameModel(id.model, model), 20000);
+    if (!device) throw new Error("the unit does not answer");
+    const input = device.link.input, output = device.link.output; device.link.close();
+    link = new BackupConnection(input, output);
+    const r = (await loadConverter("../editor/conv/conv.wasm")).convert(readBackup(archive));
+    if (r.writeBack.length)
+      await restoreBackup((q, o) => link.request(q, o), r.archive,
+        (done, total) => sayK("converting", `${Math.round(done / Math.max(1, total) * 100)}%`), r.writeBack);
+    for (const x of r.report)
+      if (x.what !== "kept" || x.note) log(`${x.id}: ${x.was} -> ${x.now} (${x.what})${x.note ? `: ${x.note}` : ""}`);
+    sayK(r.report.some((x) => /^(refused|kept as)/.test(x.what)) ? "convertedPart" : r.writeBack.length ? "converted" : "asIs");
+  } catch (e) { sayK("convertFailed", e.message); log(String(e.stack || e)); }
+  finally { if (link) link.close(); }
 }
 function archiveInfo(a) {
   let pos = a.indexOf(0); if (pos < 0) throw new Error("Invalid INFO");
