@@ -21,9 +21,9 @@ static const char *const N_NOISE_MODE[] = {"ANLG", "DUST", "LFSR", "META"};
 enum { NZ_ANLG, NZ_DUST, NZ_LFSR, NZ_META };
 static const char *const N_NOISE_LONG[] = {"L23", "L20", "L17", "L15", "L13", "L11", "L9", "L7", 0};
 static const char *const N_NOISE_META[] = {"127", "127B", "93", "63", "63B", "31", "15", "7", 0};
-static const param_desc_t NOISE_LONG = {"LEN", F_INT, 0, 127, 0, N_NOISE_LONG, 0};   /* = edit[5] but the names */
-static const param_desc_t NOISE_META = {"LEN", F_INT, 0, 127, 0, N_NOISE_META, 0};
-static const param_desc_t NOISE_CLK = {"CLK", F_INT, 0, 127, 0, 0, "st"};           /* = edit[7]: above the key */
+static const param_desc_t NOISE_LONG = {"LEN", N_NOISE_LONG, 0, 127, 0, F_INT, 0};   /* = edit[5] but the names */
+static const param_desc_t NOISE_META = {"LEN", N_NOISE_META, 0, 127, 0, F_INT, 0};
+static const param_desc_t NOISE_CLK = {"CLK", 0, 0, 127, 0, F_INT, U_ST};           /* = edit[7]: above the key */
 
 /* Galois taps of the long registers (maximal length: 2^n - 1 clocks) */
 static const uint32_t NOISE_TAPS[8] = {0x420000u, 0x90000u, 1u << 16 | 1u << 13, 0x6000u, 0x100Du, 0x500u, 0x110u, 0x60u};
@@ -259,14 +259,14 @@ static const engine_t ENG_NOISE = {
     .name = "NOISE",
     .page_title = {"SOURCE", "MOVE"},
     .edit = {
-        {"MODE", F_ENUM, 0, 3, 0, N_NOISE_MODE, 0},
-        {"COLOR", F_PCT, 0, 127, 64, 0, 0},
-        {"CUTOFF", F_CUTOFF, 0, 127, 80, 0, 0},
-        {"RES", F_PCT, 0, 127, 30, 0, 0},
-        {"KEYTRK", F_PCT, 0, 127, 64, 0, 0},
-        {"DENSITY", F_PCT, 0, 127, 0, 0, 0},           /* LFSR, META: the register (noise_desc) */
-        {"DRIFT", F_PCT, 0, 127, 0, 0, 0},
-        {"CRUSH", F_PCT, 0, 127, 0, 0, 0},           /* LFSR, META: the clock above the key */
+        {"MODE", N_NOISE_MODE, 0, 3, 0, F_ENUM, 0},
+        {"COLOR", 0, 0, 127, 64, F_PCT, 0},
+        {"CUTOFF", 0, 0, 127, 80, F_CUTOFF, 0},
+        {"RES", 0, 0, 127, 30, F_PCT, 0},
+        {"KEYTRK", 0, 0, 127, 64, F_PCT, 0},
+        {"DENSITY", 0, 0, 127, 0, F_PCT, 0},           /* LFSR, META: the register (noise_desc) */
+        {"DRIFT", 0, 0, 127, 0, F_PCT, 0},
+        {"CRUSH", 0, 0, 127, 0, F_PCT, 0},           /* LFSR, META: the clock above the key */
     },
     .presets = NOISE_PRESETS,
     .npresets = NELEM(NOISE_PRESETS),
