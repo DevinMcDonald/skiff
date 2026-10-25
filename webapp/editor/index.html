@@ -1074,6 +1074,20 @@ function replyMatches(cmd, args, a) {
 
 /* strict request/response: one frame in flight, the rest queued. Push frames (CHANGED, RELOAD,
    STEP_CHANGED) can come at any time, also between a request and its reply: they go to onPush. */
+/* (2.0.1, #50) the ports a unit may be on, as the installer finds them (fm1ota.js find): an input and an output of the
+   same name, connected, the name one a unit can have (macOS can give its port a generic name: the installer found the
+   unit, the editor looked for "Felucca" only). "Felucca" first; connect() takes the first pair that answers INFO */
+const UNIT_PORT = /fm-1|smk|elite|mke-p37|starry|felucca|composite|sinco|usb-midi/i;
+function portPairs(access) {
+  const outs = [...access.outputs.values()], pairs = [];
+  for (const i of access.inputs.values()) {
+    if (i.state === "disconnected" || !UNIT_PORT.test(i.name || "")) continue;
+    const o = outs.find((x) => x.name === i.name && x.state !== "disconnected");
+    if (o) pairs.push([i, o]);
+  }
+  return pairs.sort((a, b) => /felucca/i.test(b[0].name) - /felucca/i.test(a[0].name));
+}
+
 class Link {
   constructor(send, opts = {}) {
     this.sendRaw = send;
@@ -4035,19 +4049,27 @@ async function connect() {
       }
       access.onstatechange = onState;
     }
-    const isF = (p) => /felucca/i.test(p.name || "") && p.state !== "disconnected";
-    const input = [...access.inputs.values()].find(isF);
-    const output = [...access.outputs.values()].find(isF);
-    if (!input || !output) { sayK("nodevice"); return; }
-    const link = new Link((d) => output.send(d), {
-      timeout: 300,
-      onUnknown: (f) => console.debug("ignored reply", f),
-      onTimeout: () => sayK("noreply"),
-      onPush: (f) => onPush(f),
-      onGap: () => { rewatch = true; },
-    });
-    input.onmidimessage = (e) => link.receive(e.data);
-    if (input.open) await input.open().catch(() => {});
+    const pairs = portPairs(access);
+    let input = null, output = null, link = null;
+    for (const [i, o] of pairs) {                   /* ((2.0.1, #50) one pair: as before (load asks INFO); more: the
+                                                     * first that answers INFO, as the installer's handshake) */
+      const l = new Link((d) => o.send(d), {
+        timeout: 300,
+        onUnknown: (f) => console.debug("ignored reply", f),
+        onTimeout: () => sayK("noreply"),
+        onPush: (f) => onPush(f),
+        onGap: () => { rewatch = true; },
+      });
+      i.onmidimessage = (e) => l.receive(e.data);
+      if (i.open) await i.open().catch(() => {});
+      if (pairs.length === 1 || await l.request(req.info(), { timeout: 500, retries: 2, quiet: true }).then(() => true, () => false)) {
+        [input, output, link] = [i, o, l];
+        break;
+      }
+      l.closed = true;
+      i.onmidimessage = null;
+    }
+    if (!link) { sayK("nodevice"); return; }
     dev = { link, input, output, info: null, pdesc: [], gdesc: [], names: [], dump: null, steps: [], slotUsed: [null, null, null, null],
       keys: null, watch: false, bank: null };
     connectedDevice = dev;
@@ -4089,7 +4111,7 @@ function disconnect(reasonKey = "disconnected") {
 
 function onState(e) {
   const p = e.port;
-  if (!p || !/felucca/i.test(p.name || "")) return;
+  if (!p || !UNIT_PORT.test(p.name || "")) return;   /* ((2.0.1, #50) the names connect() takes) */
   if (dev && p.state === "disconnected" && (p.id === dev.input.id || p.id === dev.output.id)) {
     disconnect("lost");
   } else if (!dev && wantConnected && p.state === "connected" && p.type === "output") {
