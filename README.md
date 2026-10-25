@@ -14,7 +14,10 @@ synths and drums, patterns and songs, live performance, and a screen that shows 
   <img src="https://img.shields.io/badge/hardware-M--VAVE%20FM--1%20%7C%20SMK--37%20Pro-555" alt="Hardware: M-VAVE FM-1 | SMK-37 Pro">
 </p>
 
-<p align="center"><b>New in 2.0:</b> NOTES and FEEL, notes that overlap with lengths of their own, chains, songs
+<p align="center"><b>New in 2.0.1:</b> fixes from your issues: FM6 sounds from DX7 banks no longer crackle, OCT+ in the
+EDIT layer turns every drum lane back on, and the editor finds the unit on a Mac too ·
+<a href="https://github.com/illuminus5/skiff/releases/tag/v2.0.1">the release notes</a><br>
+<b>New in 2.0:</b> NOTES and FEEL, notes that overlap with lengths of their own, chains, songs
 that play once and change sounds, drum lanes panned and your own drum kits, one mute and one MOD page, and new save
 formats with room to grow ·
 <a href="https://github.com/illuminus5/skiff/releases/tag/v2.0">the release notes</a><br>
@@ -57,12 +60,12 @@ Custom firmware, at your own risk; the way back to the official firmware is belo
 connect the FM-1 by USB and follow it. The same page takes the FM-1 back to the official V15 firmware, saving a
 complete backup of your music first.
 
-**With Python 3:** download `skiff-2.0.fwsc` from the [latest release](https://github.com/illuminus5/skiff/releases/latest)
+**With Python 3:** download `skiff-2.0.1.fwsc` from the [latest release](https://github.com/illuminus5/skiff/releases/latest)
 and, with this repository's `tools/` folder,
 
 ```
 pip install mido python-rtmidi
-python tools/fm1_install.py skiff-2.0.fwsc
+python tools/fm1_install.py skiff-2.0.1.fwsc
 ```
 
 It takes about two minutes and the FM-1 restarts on Skiff.
@@ -71,7 +74,7 @@ It takes about two minutes and the FM-1 restarts on Skiff.
 file, or M-VAVE's own updater. V15 writes its Bluetooth settings anew on its first start, so pair Bluetooth
 devices again if they don't connect.
 
-**On the SMK-37 Pro:** the same installer finds the keyboard and picks its build (`skiff-2.0-smk37.fwsc` for
+**On the SMK-37 Pro:** the same installer finds the keyboard and picks its build (`skiff-2.0.1-smk37.fwsc` for
 Python). Two steps come first: M-VAVE's firmware V016 on the keyboard, and a backup of its flash, which holds the
 keyboard's own key calibration. [SMK37.md](SMK37.md#install) has both, the way back and what to do if it does not
 start.
@@ -338,7 +341,8 @@ Felucca) first, and lists what it converted.
 - **MOMENTARY** (1.3): hold LFO and turn knobs on HOME, a sound page, an FX page or the MIXER: let go and the values
   come back (OCT+ keeps them), not recorded; (2.0) over a bar, or as MENU › CONTROL › RETURN says (SNAP, 1 BEAT,
   1 BAR), the same for FX's macros and PERFORM's throws
-- **Lane mutes** (1.3): on a DRUM or DRUM-X track the EDIT layer's black keys 1–8 mute its lanes
+- **Lane mutes** (1.3): on a DRUM or DRUM-X track the EDIT layer's black keys 1–8 mute its lanes; OCT− puts them
+  back as they were when the layer opened, and (2.0.1) OCT+ turns every lane on at once
 - **DUCK** (FX › DUCK): a track dips under another track's hits, the sidechain pump
 - **Effects:** per track DIST, in five types on FX › DRIVE (INSERT's SOFT, HARD, FOLD, CRUSH, FUZZ) with a TONE, and the SLICER;
   the buses on GLO: chorus (CHORUS, FLANGER or PHASER, with FEEDBACK), delay and reverb (ROOM, SPRING or a stereo
@@ -684,7 +688,7 @@ On the SMK-37: [SMK37.md](SMK37.md#if-it-does-not-start).
 **The screen says UPDATE MODE, or stays black while a computer sees a USB MIDI device named "Felucca
 Update":** an install was cut off, and the FM-1 waits in Skiff's update loader at every power-on. Nothing is
 lost. Connect it by USB and run the [Skiff installer](https://illuminus5.github.io/skiff/webapp/installer/) again
-(or `python tools/fm1_install.py skiff-2.0.fwsc`): it finishes the install. If the installer can't find it, plug
+(or `python tools/fm1_install.py skiff-2.0.1.fwsc`): it finishes the install. If the installer can't find it, plug
 the FM-1 straight into the computer: a USB hub or USB-sharing software can lose it when it switches to update mode.
 M-VAVE's own updater does not see the FM-1 in this state. (Since 1.3.2 the loader says UPDATE MODE on the screen;
 one an older Skiff left there keeps it black.)

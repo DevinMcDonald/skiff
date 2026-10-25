@@ -10,7 +10,8 @@
  *   MOMENTARY    LFO held: KNOB 1..4 on HOME, the sound / FX pages and MIXER change their values, LFO let go puts them
  *                back; OCT+ keeps; no automation; a load puts them back first; STEP and a layer as ever; 8 at most
  *   LANE MUTES   DRUM and DRUM-X: the EDIT layer's black keys 1..8 mute the lanes (the hit unheard, the others as
- *                ever); OCT- puts them back as the layer opened; a sound or project load clears them
+ *                ever); OCT- puts them back as the layer opened; (2.0.1, #54) OCT+ every lane on at once; a sound or
+ *                project load clears them
  *   PREVIEW      MENU > CONTROL > STEP PREVIEW ON: KNOB 1 on ROLL, stopped, sounds the step the cursor lands on; OFF,
  *                or playing, silent; the MIDI tab holds CLOCK and MIDI IN
  *   PROGRAM      MIDI Program Change: the channel's track loads its n-th preset (PRESETS order, aliases skipped);
@@ -575,8 +576,16 @@ static int lane_mutes(void)
         key_down(black(1)); frame(); key_up(black(1)); frame();
         btn_up(B_EDIT); frame();
         ok &= drum_mute[3] == 2u;
+        btn_down(B_EDIT); frames(500);                  /* ((2.0.1, #54) the layer again: two more muted, OCT+ all on) */
+        key_down(black(0)); frame(); key_up(black(0)); frame();
+        key_down(black(2)); frame(); key_up(black(2)); frame();
+        ok &= drum_mute[3] == 7u && hit_level(t, 0) == 0;
+        oct_fwd();
+        ok &= !drum_mute[3] && hit_level(t, 0) > 0 && ui.layer == LAYER_EDIT;
+        btn_up(B_EDIT); frame();
+        ok &= !drum_mute[3];
         bad += check(e ? "  DRUM-X the same" : "LANE MUTES: DRUM, EDIT layer black key 1: the kick unheard, the snare as ever; "
-                     "again: back; OCT- as the layer opened; kept when let go", ok);
+                     "again: back; OCT- as the layer opened; kept when let go; OCT+ every lane on", ok);
     }
     apply_preset_to(TSEL, 0);                          /* (the engine's first preset: a sound load) */
     bad += check("  a sound load clears the track's mutes", !drum_mute[3]);

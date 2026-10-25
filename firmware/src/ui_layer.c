@@ -712,6 +712,11 @@ static uint32_t layer_oct(uint32_t pressed, uint32_t oct)
         ui.force = 1;
         mine = 0;
     }
+    if ((mine & 2u) && lys.l == LAYER_EDIT && drum_track(TSEL)) {   /* ((2.0.1, #54) OCT+: every lane on at once, as a */
+        drum_mute[song.sel] = 0;                        /* build-up's release (the black keys mute them one by one) */
+        ui_message("ALL LANES ON");
+        ui.force = 1;
+    }
     if (mine & 1u) {                                    /* OCT-: back to when it opened */
         if (lys.l == LAYER_FX) {                        /* (FX LATCH) every effect and macro off */
             perf_latched = 0;

@@ -35,7 +35,7 @@ const FW_ROOT = process.env.FELUCCA_ROOT || join(HERE, "..");
 const html = readFileSync(join(HERE, "editor.html"), "utf8");
 const proto = html.slice(html.indexOf("/*PROTO-BEGIN*/"), html.indexOf("/*PROTO-END*/"));
 const E = vm.runInNewContext(proto + `
-;({ frame, unframe, parse, songReply, req, Link, parseWav, resample, normalize, takeSample, kitZones, LANES, autoTrim, zoomView, rootFromName, buildSlot, makeMockDevice, CMD, SMP,
+;({ frame, unframe, parse, songReply, req, Link, parseWav, resample, normalize, takeSample, kitZones, LANES, portPairs, autoTrim, zoomView, rootFromName, buildSlot, makeMockDevice, CMD, SMP,
    UP, bank, capturePatch, auditionPatch, lightRefuses, startWatch, libraryFile, readLibraryFile, paramKeys, patternFromSteps, stepsFromPattern, upName,
    mixer, parseNotes, parseHits, hitsText, gridFromSteps, LANE_NOTE, LANE_OF, readDevicePreferences, devicePresetRows, TC_NAMES, engineOrder, ENGINE_ORDER, aliasOf, fmtValue, FM6, enumShown, F,
    FM4, fromDigital, fromPerc, DRUM_KIT_E, DX_KIT_DEF, DX_KITS, DRUMX_PKIT,
@@ -320,6 +320,17 @@ async function editorMock() {
   ok(st.n === 2 && st.notes[1] === 64 && st.vel === 100, "editor: STEP_SET");
   const pj = E.parse[E.CMD.PROJECT](await rq(E.req.project(1, 2), { timeout: 4000, retries: 0 }));
   ok(pj.used === 1, "editor: PROJECT save");
+  {   /* (2.0.1, #50) the ports connect() tries, as the installer's: a generic name too, "Felucca" first, never other gear */
+    const port = (name, state = "connected") => ({ name, state });
+    const access = (ins, outs) => ({ inputs: new Map(ins.map((p, k) => [k, p])), outputs: new Map(outs.map((p, k) => [k, p])) });
+    const names = (a) => E.portPairs(a).map(([i, o]) => `${i.name}|${o.name}`).join();
+    const mac = names(access([port("USB Composite Device"), port("Arturia KeyStep 37")],
+      [port("Arturia KeyStep 37"), port("USB Composite Device")]));
+    const two = names(access([port("USB-MIDI"), port("Felucca 0"), port("Felucca 1", "disconnected"), port("SMK-37 Pro")],
+      [port("USB-MIDI"), port("Felucca 0"), port("Felucca 1")]));
+    ok(mac === "USB Composite Device|USB Composite Device" && two === "Felucca 0|Felucca 0,USB-MIDI|USB-MIDI",
+      `editor: (#50) the unit's ports by the installer's names, "Felucca" first, other gear and lone or gone ports left out (${mac}; ${two})`);
+  }
   /* sample upload as smpUpload() does it */
   const s = Int16Array.from({ length: 3000 }, (_, i) => Math.round(8000 * Math.sin(i / 7)));
   const { hdr, data } = E.buildSlot("test", [{ s, root: 60 }]);
